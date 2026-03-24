@@ -1,0 +1,73 @@
+USE [Ocampo]
+GO
+/****** Object:  StoredProcedure [dbo].[sp_ImportarMatrizUnidades]    Script Date: 24/3/2026 19:51:36 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+ALTER procedure  [dbo].[sp_ImportarMatrizUnidades]
+   
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+	 declare @RutaArchivo NVARCHAR(500) = 'C:\OCAMPO\Solucion\OD\Matriz De Emprendimientos\Matriz de Emprendimientos - Actualizada al 10_02_26_UNIDADES.csv'
+
+    BEGIN TRY
+        -- 1. Tabla de paso temporal
+        IF OBJECT_ID('tempdb..#CargaMasiva') IS NOT NULL DROP TABLE #CargaMasiva;
+
+        CREATE TABLE #CargaMasiva (
+            Col_Vacia VARCHAR(MAX), -- Columna A (vacía)
+            c1 VARCHAR(MAX),        -- DIRECCIÓN (B)
+            c2 VARCHAR(MAX),        -- BARRIO (C)
+            c3 VARCHAR(MAX),        -- VALOR M2 (D)
+            c4 VARCHAR(MAX),        -- TIPOLOGÍA (E)
+            c5 VARCHAR(MAX),        -- PRIORIDAD (F)
+            c6 VARCHAR(MAX)         -- PORTAL (G)
+        );
+
+        -- 2. Ejecutar BULK INSERT dinámico
+        DECLARE @SQL NVARCHAR(MAX);
+        SET @SQL = N'BULK INSERT #CargaMasiva
+                     FROM ''' + @RutaArchivo + '''
+                     WITH (
+                        FIRSTROW = 2,
+                        FIELDTERMINATOR = '','',
+                        ROWTERMINATOR = ''\n'',
+                        FORMAT = ''CSV'',
+                        FIELDQUOTE = ''"'',
+                        CODEPAGE = ''65001''
+                     );';
+        
+        EXEC sp_executesql @SQL;
+
+        -- 3. Insertar en la tabla física
+        INSERT INTO Emprendimientos_Matriz_unidades 
+            ([DIRECCIÓN], [BARRIO], [VALOR_M2], [TIPOLOGÍA], [PRIORIDAD_ZP], [PORTAL_ZP], [Origen_Archivo])
+        SELECT 
+            LTRIM(RTRIM(c1)),
+            LTRIM(RTRIM(c2)),
+            -- Limpieza de formatos numéricos
+            TRY_CAST(REPLACE(REPLACE(REPLACE(c3, '$', ''), '.', ''), ',', '.') AS DECIMAL(18,2)),
+            c4,
+            c5,
+            c6,
+            REVERSE(LEFT(REVERSE(@RutaArchivo), CHARINDEX('\', REVERSE(@RutaArchivo)) - 1)) -- Extrae el nombre del archivo de la ruta
+        FROM #CargaMasiva
+        WHERE c1 IS NOT NULL AND c1 <> '';
+
+        PRINT 'Carga finalizada exitosamente desde: ' + @RutaArchivo;
+
+    END TRY
+    BEGIN CATCH
+        SELECT 
+            ERROR_NUMBER() AS ErrorNumber,
+            ERROR_MESSAGE() AS ErrorMessage;
+        PRINT 'Error al importar los datos.';
+    END CATCH
+
+    -- Limpieza
+    IF OBJECT_ID('tempdb..#CargaMasiva') IS NOT NULL DROP TABLE #CargaMasiva;
+END
